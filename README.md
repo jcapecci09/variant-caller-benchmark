@@ -90,7 +90,7 @@ All arguments are optional. If no arguments are provided, the pipeline uses the 
 
 ## Output
 
-The pipeline generates a CSV file called 'results.csv' containing benchmarking results for each variant caller, including runtime, memory usage, and variant-calling performance metrics.
+The pipeline generates a CSV file called `results.csv` containing benchmarking results for each variant caller, including runtime, memory usage, and variant-calling performance metrics.
 
 | Chromosome | Coverage | Seed | Tool | Time | Memory | True-pos-baseline | True-pos-call | False-pos | False-neg | Precision | Sensitivity | F-measure |
 |---|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
