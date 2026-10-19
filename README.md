@@ -9,7 +9,7 @@ The pipeline uses BCFtools to normalize variant calls and RTG Tools to evaluate 
 Users can change the sequencing coverage, random seed, and chromosome through command-line arguments. This makes it possible to test how different sequencing conditions affect variant-calling performance.
 
 <p align="center">
-  <img src="images/draft.drawio.png" alt="Pipeline" width="700">
+  <img src="images/flowchart.png" alt="Pipeline" width="300">
 </p>
 
 ## Usage Instructions
