@@ -1,6 +1,10 @@
 # variant-caller-benchmark
 
-## Description
+> Benchmarking Variant Callers for Germline Variant Detection using holodeck simulated data
+
+---
+
+## Introduction
 
 This project compares FreeBayes, BCFtools Mpileup, and GATK HaplotypeCaller on how accurately and quickly they can identify germline genetic variants in simulated sequencing data. The pipeline uses Holodeck to generate simulated variants and sequencing reads, then aligns the reads to a reference genome using Minimap2. The variant callers analyze the same aligned reads, and their results are compared against the original simulated variants to see how accurately they identify germline variants.
 
@@ -8,9 +12,7 @@ The pipeline uses BCFtools to normalize variant calls and RTG Tools to evaluate 
 
 Users can change the sequencing coverage, random seed, and chromosome through command-line arguments. This makes it possible to test how different sequencing conditions affect variant-calling performance.
 
-<p align="center">
-  <img src="images/flowchart.png" alt="Pipeline" width="300">
-</p>
+---
 
 ## Usage Instructions
 
@@ -72,6 +74,7 @@ python benchmark.py -c 30 -s 42 -r chr20
 
 This command benchmarks variant callers using a sequencing coverage of 30×, a random seed of 42, and chromosome 20.
 
+---
 
 ## Command-line Arguments
 
@@ -82,6 +85,8 @@ This command benchmarks variant callers using a sequencing coverage of 30×, a r
 | `-r` | `--chromosome` | Chromosome to download and benchmark | `chr20` |
 
 All arguments are optional. If no arguments are provided, the pipeline uses the default values shown above.
+
+---
 
 ## Output
 
@@ -94,8 +99,12 @@ The pipeline generates a CSV file containing benchmarking results for each varia
 
 **Note:** GATK HaplotypeCaller support will be added in a future update.
 
+---
+
 ## Results
 
+
+---
 
 ## Future Improvements
 
