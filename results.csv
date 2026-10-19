@@ -1,0 +1,5 @@
+Chromosome,Coverage,Seed,Tool,Time,Memory,True-pos-baseline,True-pos-call,False-pos,False-neg,Precision,Sensitivity,F-measure
+chr20,30,42,freebayes,9:33.48,199384,72219,71918,370,1724,0.9949,0.9767,0.9857
+chr20,30,42,bcftools,6:10.28,105020,71716,74881,100,2227,0.9987,0.9699,0.9841
+chr20,10,42,freebayes,3:46.33,199348,68630,68401,6944,5313,0.9078,0.9281,0.9179
+chr20,10,42,bcftools,3:23.30,104928,66107,68931,1132,7836,0.9838,0.8940,0.9368

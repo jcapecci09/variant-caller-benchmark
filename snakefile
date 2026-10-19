@@ -170,6 +170,7 @@ rule benchmark_freebayes:
         | bgzip -c > {output.vcf}
         '''
 
+
 rule normalize_vcf:
     input:
         ref = f'Data/{chromosome}/{chromosome}.fa',
