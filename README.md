@@ -1,9 +1,14 @@
 # variant-caller-benchmark
 
-## Highlights 
-
 ## Description
 
+This project compares FreeBayes, BCFtools Mpileup, and GATK HaplotypeCaller on how accurately and quickly they can identify genetic variants in simulated sequencing data. The pipeline uses Holodeck to generate simulated variants and sequencing reads, then aligns the reads to a reference genome using Minimap2. Both variant callers are run on the same aligned reads, and their results are compared against the original simulated variants to see how well they performed.
+
+The pipeline uses BCFtools to normalize variant calls and RTG Tools to evaluate accuracy. It also records runtime and memory usage to compare the computational cost of each tool. Results are collected into a CSV file containing metrics such as precision, sensitivity, and F-measure, along with runtime and memory usage.
+
+Users can change the sequencing coverage, random seed, and chromosome through command-line arguments. This makes it possible to test how different sequencing conditions affect variant-calling performance.
+
+### Pipeline
 
 ## Usage Instructions
 
@@ -87,7 +92,16 @@ The pipeline generates a CSV file containing benchmarking results for each varia
 
 **Note:** GATK HaplotypeCaller support will be added in a future update.
 
-## Methods
+## Results
+
+
+## Future Improvements
+
+- Add support for GATK HaplotypeCaller.
+- Create a batch benchmarking script to test 5 random seeds, 3 sequencing coverage levels, 5 chromosomes, and 3 variant callers (225 datapoints).
+- Expand output metrics to include separate precision and sensitivity measurements for indels and SNPs.
+- Create scripts to visualize benchmarking results using graphs.
+
 
 
 
