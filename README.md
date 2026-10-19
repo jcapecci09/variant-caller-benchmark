@@ -2,7 +2,7 @@
 
 ## Description
 
-This project compares FreeBayes, BCFtools Mpileup, and GATK HaplotypeCaller on how accurately and quickly they can identify genetic variants in simulated sequencing data. The pipeline uses Holodeck to generate simulated variants and sequencing reads, then aligns the reads to a reference genome using Minimap2. Both variant callers are run on the same aligned reads, and their results are compared against the original simulated variants to see how well they performed.
+This project compares FreeBayes, BCFtools Mpileup, and GATK HaplotypeCaller on how accurately and quickly they can identify germline genetic variants in simulated sequencing data. The pipeline uses Holodeck to generate simulated variants and sequencing reads, then aligns the reads to a reference genome using Minimap2. The variant callers analyze the same aligned reads, and their results are compared against the original simulated variants to see how accurately they identify germline variants.
 
 The pipeline uses BCFtools to normalize variant calls and RTG Tools to evaluate accuracy. It also records runtime and memory usage to compare the computational cost of each tool. Results are collected into a CSV file containing metrics such as precision, sensitivity, and F-measure, along with runtime and memory usage.
 
