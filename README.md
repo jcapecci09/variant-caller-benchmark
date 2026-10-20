@@ -110,7 +110,8 @@ Work in progress.
 ## Future Improvements
 
 - Add support for GATK HaplotypeCaller.
-- Create a batch benchmarking script to test 5 random seeds, 3 sequencing coverage levels, 5 chromosomes, and 3 variant callers (225 datapoints).
+- Expand `benchmark.py` to test 5 random seeds, 3 sequencing coverage levels, 5 chromosomes, and 3 variant callers (225 datapoints) all at once.
+**Note:** expansion of script user could use input text file to specify chromosome, coverage level, and number of seeds
 - Expand output metrics to include separate precision and sensitivity measurements for indels and SNPs.
 - Create scripts to visualize benchmarking results using graphs.
 
