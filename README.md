@@ -1,5 +1,7 @@
 # variant-caller-benchmark
 
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white) ![Conda](https://img.shields.io/badge/Conda-44A833?style=flat&logo=anaconda&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat&logo=linux&logoColor=black) ![Snakemake](https://img.shields.io/badge/Snakemake-2496ED?style=flat) ![minimap2](https://img.shields.io/badge/minimap2-4B8BBE?style=flat)  ![BCFtools](https://img.shields.io/badge/BCFtools-5C6BC0?style=flat) ![GATK](https://img.shields.io/badge/GATK-008577?style=flat) ![FreeBayes](https://img.shields.io/badge/FreeBayes-6A5ACD?style=flat) ![RTG_Tools](https://img.shields.io/badge/RTG_Tools-607D8B?style=flat) ![Holodeck](https://img.shields.io/badge/Holodeck-B565A7?style=flat)
+
 > Benchmarking Variant Callers for Germline Variant Detection using holodeck simulated data
 
 ---
