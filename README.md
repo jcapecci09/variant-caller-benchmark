@@ -68,25 +68,26 @@ conda env create -f variants.yml
 conda activate variants
 ```
 
-### 5. Run the benchmark
+### 5. Run the benchmark insert text file
 
 ```bash
-python benchmark.py -c 30 -s 42 -r chr20
+python benchmark.py -i params.txt
 ```
 
-This command benchmarks variant callers using a sequencing coverage of 30×, a random seed of 42, and chromosome 20.
 
 ---
+## Input file
 
-## Command-line Arguments
+The input file must be a `params.txt` file containing comma-separated values in the following format:
+```text
+coverages: 10,5
+seed: 4,3
+chromosomes: chr20,chr21
+```
 
-| Flag | Long Option | Description | Default |
-|---|---|---|---|
-| `-c` | `--coverage` | Sequencing coverage | `30` |
-| `-s` | `--seed` | Random seed used to simulate reads | `42` |
-| `-r` | `--chromosome` | Chromosome to download and benchmark | `chr20` |
+**Note:** Update the comma-separated values to test different chromosomes, random seeds, or sequencing coverage levels.
 
-All arguments are optional. If no arguments are provided, the pipeline uses the default values shown above.
+The example above performs benchmarking at 10× and 5× coverage on chromosomes 20 and 21, using two different random seeds (replications).
 
 ---
 
@@ -96,11 +97,9 @@ The pipeline generates a CSV file called `results.csv` containing benchmarking r
 
 | Chromosome | Coverage | Seed | Tool | Time | Memory | True-pos-baseline | True-pos-call | False-pos | False-neg | Precision | Sensitivity | F-measure |
 |---|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| chr20 | 30 | 42 | freebayes | 9:33.48 | 199384 | 72219 | 71918 | 370 | 1724 | 0.9949 | 0.9767 | 0.9857 |
-| chr20 | 30 | 42 | bcftools | 6:10.28 | 105020 | 71716 | 74881 | 100 | 2227 | 0.9987 | 0.9699 | 0.9841 |
-
-**Note:** GATK HaplotypeCaller support will be added in a future update.
-
+| chr21 | 10 | 3 | gatk |	7:05.04	| 1616812 |	40780 |	42360 |	547 |	5284 |	0.9873 |	0.8853 |	0.9335 |
+| chr21 |	10 | 3 | freebayes |	2:25.83 |	146244 |	42032 |	41929 |	4353 |	4032 |	0.9059 | 0.9125 |	0.9092 |
+| chr21 |	10 |	3 |	bcftools | 2:19.93 |	87876 |	40616 |	42302 |	490 |	5448 |	0.9885 |	0.8817 |	0.9321 |
 ---
 
 ## Results
