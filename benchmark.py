@@ -86,8 +86,8 @@ def main():
     # use snakemake pipeline to benchmark tools at 
     # different replications (seeds), sequencing coverages, and chromosomes
     for chromosome in chromosomes:
-        for seed in seeds:
-            for coverage in coverages:
+        for coverage in coverages:
+            for seed in seeds:
 
                 # set output path
                 output = f'coverage{coverage}_seed{seed}'

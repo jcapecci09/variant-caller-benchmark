@@ -1,4 +1,3 @@
-
 """Append results from pipeline to results.csv
 
 Author: Jimmy Capecci
