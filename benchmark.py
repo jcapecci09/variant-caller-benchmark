@@ -95,6 +95,7 @@ def main():
                 # run pipeline
                 subprocess.run([
                     'snakemake',
+                    '-s', 'pipelines/snakefile',
                     '--cores', '4',
                     '--config',
                     f'coverage={coverage}',
@@ -104,7 +105,7 @@ def main():
                 ], check=True)
 
         # Remove chromosome data to save memory
-        shutil.rmtree(f"Data/{chromosome}")
+        # shutil.rmtree(f"Data/{chromosome}")
 
 
 if __name__ == '__main__':
