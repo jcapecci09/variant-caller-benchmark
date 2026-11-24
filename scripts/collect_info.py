@@ -38,6 +38,8 @@ def main():
     parser.add_argument('--chromosome', required=True, help='Chromosome being simulated')
     parser.add_argument('-c', '--coverage', required=True, help='Coverage used to simulate reads')
     parser.add_argument('-s', '--seed', required=True, help='Seed used to simulate reads')
+    parser.add_argument('--min_err', required=True, help='Coverage used to simulate reads')
+    parser.add_argument('--max_err', required=True, help='Seed used to simulate reads')
 
     # grab arguments from command line
     args = parser.parse_args()
@@ -49,6 +51,8 @@ def main():
     chromosome = args.chromosome
     coverage = args.coverage
     seed = args.seed
+    max_err = args.max_err
+    min_err = args.min_err
 
     # set output csv path and dictionary for collection
     output_csv = 'results.csv'
@@ -56,7 +60,7 @@ def main():
 
     # if results.csv doesnt exist intialize it with headers
     if not Path(output_csv).exists():
-        headers = ['Chromosome', 'Coverage', 'Seed', 'Tool', 'Time', 
+        headers = ['Chromosome', 'Coverage', 'Seed', 'Min_err', 'Max_err', 'Tool', 'Time', 
                'Memory', 'True-pos-baseline', 'True-pos-call',
                'False-pos', 'False-neg', 'Precision', 'Sensitivity',
                'F-measure', 'Indel-True-pos-baseline', 'Indel-True-pos-call',
@@ -127,7 +131,7 @@ def main():
     # write results to csv 
     with open(output_csv, 'a') as o:
         for key, stats_dict in data_collector.items():
-            row = [chromosome, coverage, seed, key, *stats_dict.values()]
+            row = [chromosome, coverage, seed, min_err, max_err, key, *stats_dict.values()]
             o.write(','.join(row) + '\n')
 
 if __name__ == '__main__':

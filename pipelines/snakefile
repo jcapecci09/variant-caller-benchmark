@@ -2,6 +2,8 @@ coverage = config["coverage"]
 chromosome = config['chromosome']
 seed = config['seed']
 folder  = config['folder']
+aligner = config["aligner"]
+
 
 rule all:
     input:
@@ -38,7 +40,7 @@ rule decompress_reference:
         '''
 
 # Index reference FASTA files for efficient sequence retrieval
-rule index_reference:
+rule index_reference_minimap:
     input:
         ref = f'Data/{chromosome}/{chromosome}.fa'
 
@@ -49,6 +51,21 @@ rule index_reference:
         '''
         samtools faidx {input.ref}
         '''
+
+rule index_reference_bwa:
+    input:
+        f'Data/{chromosome}/{chromosome}.fa'
+    output:
+        amb=f'Data/{chromosome}/{chromosome}.fa.amb',
+        ann=f'Data/{chromosome}/{chromosome}.fa.ann',
+        bwt=f'Data/{chromosome}/{chromosome}.fa.bwt',
+        pac=f'Data/{chromosome}/{chromosome}.fa.pac',
+        sa=f'Data/{chromosome}/{chromosome}.fa.sa'
+    threads: 4
+    shell:
+        """
+        bwa index {input}
+        """
 
 # ==========================================================
 # holodeck simulation and preparing for variant callers
@@ -81,6 +98,15 @@ rule generate_reads:
     input:
         ref = f'Data/{chromosome}/{chromosome}.fa',
         vcf = f'Data/{chromosome}/{folder}/simulated/truth.vcf'
+    
+    params:
+        min_err = 0.005,
+        max_err = 0.03,
+        read_len = 150,
+        frag_mean = 200,
+        frag_sd = 80,
+        max_n = 0.1
+
 
     output:
         r1 = f'Data/{chromosome}/{folder}/simulated/sim.r1.fastq.gz',
@@ -98,34 +124,61 @@ rule generate_reads:
         --seed {seed}
         '''
 
+def get_aligner_index(wildcards):
+    if aligner == "bwa":
+        return expand(
+            "Data/{chromosome}/{chromosome}.fa.{extension}",
+            chromosome=chromosome,
+            extension=["amb", "ann", "bwt", "pac", "sa"]
+        )
+    return []
+
 # Align simulated reads using minimap2
+
 rule align_reads:
     threads: 4
+
     input:
         ref = f'Data/{chromosome}/{chromosome}.fa',
         r1 = f'Data/{chromosome}/{folder}/simulated/sim.r1.fastq.gz',
-        r2 = f'Data/{chromosome}/{folder}/simulated/sim.r2.fastq.gz'
+        r2 = f'Data/{chromosome}/{folder}/simulated/sim.r2.fastq.gz',
+        index = get_aligner_index
 
     output:
-        bam = f'Data/{chromosome}/{folder}/aligned/minimap2_sorted.bam',
-        bam_index = f'Data/{chromosome}/{folder}/aligned/minimap2_sorted.bam.bai'
+        bam = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam',
+        bam_index = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam.bai'
 
     shell:
-        '''
+        """
         mkdir -p Data/{chromosome}/{folder}/aligned
 
-        minimap2 \
-            -ax sr \
-            -R '@RG\\tID:sample1\\tSM:sample1\\tPL:ILLUMINA' \
-            -t {threads} \
-            {input.ref} \
-            {input.r1} \
-            {input.r2} \
-            | samtools sort \
-            -o {output.bam}
+        if [ "{aligner}" = "minimap2" ]; then
+            minimap2 \
+                -ax sr \
+                -R '@RG\\tID:sample1\\tSM:sample1\\tPL:ILLUMINA' \
+                -t {threads} \
+                {input.ref} \
+                {input.r1} \
+                {input.r2} \
+            | samtools sort -@ {threads} -o {output.bam}
+
+        elif [ "{aligner}" = "bwa" ]; then
+            bwa mem \
+                -R '@RG\\tID:sample1\\tSM:sample1\\tPL:ILLUMINA' \
+                -t {threads} \
+                {input.ref} \
+                {input.r1} \
+                {input.r2} \
+            | samtools sort -@ {threads} -o {output.bam}
+
+        else
+            echo "ERROR: Unknown aligner: {aligner}"
+            exit 1
+        fi
 
         samtools index {output.bam}
-        '''
+        """
+
 
 # ==========================================================
 # variant calling, BCFtools, FreeBayes,
@@ -138,8 +191,8 @@ rule benchmark_bcftools:
 
     input:
         ref = f'Data/{chromosome}/{chromosome}.fa',
-        bam = f'Data/{chromosome}/{folder}/aligned/minimap2_sorted.bam',
-        bam_index = f'Data/{chromosome}/{folder}/aligned/minimap2_sorted.bam.bai'
+        bam = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam',
+        bam_index = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam.bai'
     
     output:
         vcf = f'Data/{chromosome}/{folder}/vcfs/bcftools.vcf.gz',
@@ -169,8 +222,8 @@ rule benchmark_freebayes:
 
     input:
         ref = f'Data/{chromosome}/{chromosome}.fa',
-        bam = f'Data/{chromosome}/{folder}/aligned/minimap2_sorted.bam',
-        bam_index = f'Data/{chromosome}/{folder}/aligned/minimap2_sorted.bam.bai'
+        bam = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam',
+        bam_index = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam.bai'
 
     output:
         vcf = f'Data/{chromosome}/{folder}/vcfs/freebayes.vcf.gz',
@@ -209,9 +262,9 @@ rule benchmark_gatk_haplotypecaller:
 
     input: 
         ref = f'Data/{chromosome}/{chromosome}.fa',
-        bam = f'Data/{chromosome}/{folder}/aligned/minimap2_sorted.bam',
-        dict = f'Data/{chromosome}/{chromosome}.dict',
-        bam_index = f'Data/{chromosome}/{folder}/aligned/minimap2_sorted.bam.bai'
+        bam = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam',
+        bam_index = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam.bai',
+        dict = f'Data/{chromosome}/{chromosome}.dict'
     
     output: 
         vcf = f'Data/{chromosome}/{folder}/vcfs/gatk.vcf.gz',

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import os
 
-def to_seconds(time: str) -> float:
+def to_minutes(time: str) -> float:
     time_split = time.split(':')
 
     if len(time_split) == 2:
@@ -18,158 +18,164 @@ def to_seconds(time: str) -> float:
     raise ValueError(f"Unexpected time format: {time}")
 
 
-def generate_chart(name, df):
-    chromosomes = ['chr1', 'chr7', 'chr13', 'chr16', 'chr19', 'chr20']
+def sanitize_filename(name: str) -> str:
+  return (
+      name.replace(" ", "_")
+      .replace("(", "")
+      .replace(")", "")
+      .replace("/", "_")
+  )
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    axes = axes.flatten()
+def macro_boxplots(df):
+    rate_metrics = [
+        "Precision",
+        "Sensitivity",
+        "F-measure",
+        "Indel-Precision",
+        "Indel-Sensitivity",
+        "Indel-F-measure",
+        "Non-Indel-Precision",
+        "Non-Indel-Sensitivity",
+        "Non-Indel-F-measure",
+    ]
+    resource_metrics = ["Time_in_Minutes", "Max RSS (gb)"]
+    TOOL_PALETTE = {
+    "BCFtools": "#4477AA",  # Deep navy / HTSlib-inspired blue
+    "FreeBayes": "#EE6677",  # Warm amber-orange
+    "GATK HaplotypeCaller": "#228833",  # Deep forest/emerald green
+    }
 
-    for i, chromosome in enumerate(chromosomes):
+    sns.set_theme(style="ticks")
 
-        chrom_df = df[df['Chromosome'] == chromosome]
+    for stat in rate_metrics:
+        fig, ax = plt.subplots(figsize=(8, 5))
 
-        sns.lineplot(
-            data=chrom_df,
-            x='Coverage',
-            y=name,
-            hue='Tool',
-            ax=axes[i],
-            style='Tool',
-            markers=True,
-            dashes=False,
-            errorbar='sd',
-            err_style='bars',
-            err_kws={'capsize': 5, 'elinewidth': 1.5})
-        
+        sns.boxplot(
+            data=df,
+            x="Coverage",
+            y=stat,
+            hue="Tool",
+            palette=TOOL_PALETTE,
+            ax=ax
+        )
 
-        axes[i].set_xticks([10, 20, 30, 40])
-        axes[i].set_yticks([0.85, 0.90, 0.95, 1.0])
-        axes[i].set_title(chromosome)
+        # ax.set_xticks(cov_ticks)
+        ax.set_xlabel("Coverage")
+        ax.set_ylabel(f"{stat.replace('-', ' ')}")
+        ax.set_title(f"{stat.replace('_', ' ')} across Coverage")
+        ax.minorticks_on()
+        ax.tick_params(which="minor", axis='y', length=3, width=0.8, color="gray", direction='in')
+        ax.tick_params(axis='x', which='minor', bottom=False, top=False)
+        ax.tick_params(which="major", length=5, width=1.0, direction='in')
 
-        # Remove individual legends
-        if axes[i].get_legend():
-            axes[i].get_legend().remove()
 
-    # Get legend information
-    handles, labels = axes[0].get_legend_handles_labels()
+        ax.set_ylim(0.8, 1.0)
+ 
 
-    fig.legend(
-        handles, labels,
-        title='Tool',
-        loc='center',
-        bbox_to_anchor=(0.90, 0.10),  # Was 0.15
-        fontsize=14,
-        title_fontsize=16,
-        markerscale=1.5,
-        frameon=True
-    )
+        ax.legend(
+            title="Tool",
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1),
+            frameon=True
+        )
+        sns.despine(ax=ax)
 
-    sns.despine(fig=fig)
+        out_name = sanitize_filename(stat)
+        fig.savefig(f"Figures/{out_name}.png", dpi=300, bbox_inches="tight")
+        plt.close(fig)
 
-    # Reserve space on the bottom and right
-    fig.subplots_adjust(
-        left=0.08,
-        right=0.82,  # Reserve 18% of figure width for legend
-        top=0.93,
-        bottom=0.08,
-        wspace=0.25,
-        hspace=0.30
-    )
+def assign_pairs(min, max, error_list):
 
-    # Save Figure
-    fig.savefig('Figures/' + name + '.png', dpi=300, bbox_inches='tight')
-    plt.show()
+    for i, pair in enumerate(error_list):
+        if min == pair[0] and max == pair[1]:
+            return f'Q{i + 1}'
+
+    return None
 
 
 def main():
-    df = pd.read_csv('results.csv')
-    os.mkdir('Figures')
-    generate_chart('Precision', df)
-    generate_chart('Sensitivity', df)
-    generate_chart('F-measure', df)
+    df = pd.read_csv("results.csv")
+    os.makedirs("Figures", exist_ok=True)
+
+    error_pairs = [[0.0005, 0.001], [0.0008, 0.0025] , [0.0015, 0.005], [0.003, 0.01], [0.006, 0.02]]
+
+    df["Time_in_Minutes"] = df["Time"].apply(to_minutes)
+    df["Max RSS (gb)"] = df["Memory"] / 1024 / 1024
+    df['Error_Group'] = df.apply(
+        lambda row: assign_pairs(row['Min_err'], row['Max_err'], error_pairs),
+        axis=1
+    )
+    macro_boxplots(df)
+
+    # # Sort coverage so lines connect cleanly in order
+    # df = df.sort_values("Coverage")
+
+    # Define the grouping columns
+    group_cols = ["Chromosome", "Coverage", "Seed", "Min_err", "Max_err"]
+
+    # Extract BCFtools F-measure per group and subtract it
+    baseline = (
+        df[df["Tool"] == "BCFtools"]
+        .set_index(group_cols)["F-measure"]
+        .rename("Baseline_F")
+    )
+
+    df = df.merge(baseline, on=group_cols, how="left")
+    df["Delta_F-measure"] = df["F-measure"] - df["Baseline_F"]
+
+    # Drop helper column and save
+    df.drop(columns=["Baseline_F"]).to_csv("results_with_delta.tsv", sep="\t", index=False)
+
+    df2 = pd.read_csv('results_with_delta.tsv', sep='\t')
+
+    df2_grouped = (
+    df2.groupby(["Coverage", "Error_Group", "Tool"])["Delta_F-measure"]
+    .mean()
+    .reset_index()
+    )
+
+    markers = ["o", "s", "^", "D", "P", "X"]
+    coverages = sorted(df2_grouped["Coverage"].unique())
+
+    fig, ax = plt.subplots()
+
+    for cov, marker in zip(coverages, markers):
+        sns.stripplot(
+            data=df2_grouped[df2_grouped["Coverage"] == cov],
+            x="Error_Group",
+            y="Delta_F-measure",
+            hue="Tool",
+            marker=marker,
+            dodge=True,
+            legend=(cov == coverages[0]),  # keep one Tool legend
+            ax=ax,
+        )
+    # Add a baseline reference line at Delta_F-measure = 0 (BCFtools)
+    ax.axhline(
+        0,
+        color="black",
+        linestyle="--",
+        linewidth=1.2,
+        zorder=0,  # keeps the line behind your data markers
+        label="BCFtools baseline (0)",
+    )
+    # Simple shape legend for Coverage
+    cov_handles = [
+        plt.Line2D([], [], marker=m, color="gray", linestyle="None", label=str(c))
+        for c, m in zip(coverages, markers)
+    ]
+    ax.legend(
+        handles=ax.get_legend_handles_labels()[0] + cov_handles,
+        labels=ax.get_legend_handles_labels()[1] + [str(c) for c in coverages],
+        bbox_to_anchor=(1.02, 1),
+        loc="upper left",
+    )
+
+    plt.tight_layout()
+    plt.show()
+    plt.savefig('Test.png')
 
 
-
-
-
-
-#     chr20 = df[df['Chromosome'] == 'chr20'].copy()
-
-#     chr20['Coverage'] = pd.to_numeric(chr20['Coverage'])
-
-#     sns.lineplot(
-#         data=chr20,
-#         x='Coverage',
-#         y='Sensitivity',
-#         hue='Tool',
-#         style='Tool',
-#         markers=True,
-#         dashes=False,
-#         errorbar='sd',
-#         err_style='bars',
-#         err_kws={'capsize': 5, 'elinewidth': 1.5}
-#     )
-
-#     sns.despine()
-#     plt.title('Variant Caller sensitivity by Coverage (chr1)')
-#     plt.xlabel('Sequencing Coverage')
-#     plt.ylabel('sensitivity')
-#     plt.xticks([10, 20, 30, 40])
-#     plt.ylim(0.85, 1.00)
-#     plt.grid(alpha=0.3)
-#     plt.tight_layout()
-#     plt.savefig('Sensitivity.png', dpi=300)
-#     plt.show()
-#     plt.close()
-
-
-#     # sns.lineplot(
-#     #         data=chr20,
-#     #         x='Coverage',
-#     #         y='Memory',
-#     #         hue='Tool',
-#     #         style='Tool',
-#     #         markers=True,
-#     #         dashes=False,
-#     #         errorbar='sd',
-#     #         err_style='bars',
-#     #         err_kws={'capsize': 5, 'elinewidth': 1.5}
-#     #     )
-    
-#     # sns.despine()
-#     # plt.title('Variant Caller Memory Usage by Coverage (chr20)')
-#     # plt.xlabel('Sequencing Coverage')
-#     # plt.ylabel('Memory')
-#     # plt.xticks([10, 20, 30, 40])
-#     # plt.grid(alpha=0.3)
-#     # plt.tight_layout()
-#     # plt.savefig('memory.png', dpi=300)
-#     # plt.show()
-#     # plt.close()
-
-#     chr20['Time_in_Seconds'] = chr20['Time'].apply(lambda x: to_seconds(x)) 
-#     sns.lineplot(
-#             data=chr20,
-#             x='Coverage',
-#             y='Time_in_Seconds',
-#             hue='Tool',
-#             style='Tool',
-#             markers=True,
-#             dashes=False,
-#             errorbar='sd',
-#             err_style='bars',
-#             err_kws={'capsize': 5, 'elinewidth': 1.5}
-#         )
-    
-#     sns.despine()
-#     plt.title('Variant Caller Time by Coverage (chr20)')
-#     plt.xlabel('Sequencing Coverage')
-#     plt.ylabel('Time (minutes)')
-#     plt.xticks([10, 20, 30, 40])
-#     plt.tight_layout()
-#     plt.savefig('time.png', dpi=300)
-#     plt.show()
-#     plt.close()
 
     
 

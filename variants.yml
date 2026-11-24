@@ -14,6 +14,7 @@ dependencies:
 
   # Reference / alignment / utilities
   - minimap2=2.31
+  - bwa=0.7.18
   - samtools=1.20
   - bcftools=1.20
   - wget=1.21.4

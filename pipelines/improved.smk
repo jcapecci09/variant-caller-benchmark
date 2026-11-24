@@ -1,0 +1,597 @@
+coverage = config["coverage"]
+chromosome = config['chromosome']
+seed = config['seed']
+folder  = config['folder']
+aligner = config["aligner"]
+min_err = config['min-err']
+max_err = config['max-err']
+
+
+rule all:
+    input:
+        f'Data/{chromosome}/{folder}/benchmarking/collected.done'
+
+# ==========================================================
+# Handle chromosome reference
+# ==========================================================
+
+# Download individual chromosome reference sequences (FASTA) from the UCSC hg38 (GRCh38) genome assembly.
+rule download_reference:
+    output:
+        f'Data/{chromosome}/{chromosome}.fa.gz'
+
+    shell:
+        '''
+        mkdir -p Data/{chromosome}
+        wget \
+        'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/{chromosome}.fa.gz' \
+        -O {output}
+        '''
+
+# Decompress the downloaded chromosome reference FASTA files
+rule decompress_reference:
+    input:
+        f'Data/{chromosome}/{chromosome}.fa.gz'
+
+    output:
+        f'Data/{chromosome}/{chromosome}.fa'
+
+    shell:
+        '''
+        gunzip -c {input} > {output}
+        '''
+
+# Index reference FASTA files for efficient sequence retrieval
+rule index_reference_minimap:
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa'
+
+    output:
+        f'Data/{chromosome}/{chromosome}.fa.fai'
+
+    shell:
+        '''
+        samtools faidx {input.ref}
+        '''
+
+rule index_reference_bwa:
+    input:
+        f'Data/{chromosome}/{chromosome}.fa'
+    output:
+        amb=f'Data/{chromosome}/{chromosome}.fa.amb',
+        ann=f'Data/{chromosome}/{chromosome}.fa.ann',
+        bwt=f'Data/{chromosome}/{chromosome}.fa.bwt',
+        pac=f'Data/{chromosome}/{chromosome}.fa.pac',
+        sa=f'Data/{chromosome}/{chromosome}.fa.sa'
+    threads: 4
+    shell:
+        """
+        bwa index {input}
+        """
+
+# ==========================================================
+# holodeck simulation and preparing for variant callers
+# ==========================================================
+
+# Generate a truth VCF containing simulated genetic variants
+# Uses the reference genome and a specified random seed to generate SNPs
+rule generate_truth_vcf:
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa',
+        index = f'Data/{chromosome}/{chromosome}.fa.fai'
+
+    output:
+        vcf = f'Data/{chromosome}/{folder}/simulated/truth.vcf'
+
+    shell:
+        '''
+        mkdir -p Data/{chromosome}/{folder}/simulated
+
+        holodeck mutate \
+        -r {input.ref} \
+        -o {output.vcf} \
+        --snp-rate 0.001 \
+        --seed {seed}
+        '''
+
+# Simulate paired-end sequencing reads using the reference genome and truth VCF
+# Generates FASTQ files containing simulated reads
+rule generate_reads:
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa',
+        vcf = f'Data/{chromosome}/{folder}/simulated/truth.vcf'
+    
+    params:
+        min_err = 0.005,
+        max_err = 0.03,
+        frag_mean = 200,
+        max_n = 0.1
+
+
+    output:
+        r1 = f'Data/{chromosome}/{folder}/simulated/sim.r1.fastq.gz',
+        r2 = f'Data/{chromosome}/{folder}/simulated/sim.r2.fastq.gz'
+
+    shell:
+        '''
+        mkdir -p Data/{chromosome}/{folder}/simulated
+
+        holodeck simulate \
+        -r {input.ref} \
+        -v {input.vcf} \
+        -o Data/{chromosome}/{folder}/simulated/sim \
+        --min-error-rate {min_err} \
+        --max-error-rate {max_err} \
+        --coverage {coverage} \
+        --seed {seed}
+        '''
+
+def get_aligner_index(wildcards):
+    if aligner == "bwa":
+        return expand(
+            "Data/{chromosome}/{chromosome}.fa.{extension}",
+            chromosome=chromosome,
+            extension=["amb", "ann", "bwt", "pac", "sa"]
+        )
+    return []
+
+# Align simulated reads using minimap2
+
+rule align_reads:
+    threads: 4
+
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa',
+        r1 = f'Data/{chromosome}/{folder}/simulated/sim.r1.fastq.gz',
+        r2 = f'Data/{chromosome}/{folder}/simulated/sim.r2.fastq.gz',
+        index = get_aligner_index
+
+    output:
+        bam = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam',
+        bam_index = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam.bai'
+
+    shell:
+        """
+        mkdir -p Data/{chromosome}/{folder}/aligned
+
+        if [ "{aligner}" = "minimap2" ]; then
+            minimap2 \
+                -ax sr \
+                -R '@RG\\tID:sample1\\tSM:sample1\\tPL:ILLUMINA' \
+                -t {threads} \
+                {input.ref} \
+                {input.r1} \
+                {input.r2} \
+            | samtools sort -@ {threads} -o {output.bam}
+
+        elif [ "{aligner}" = "bwa" ]; then
+            bwa mem \
+                -R '@RG\\tID:sample1\\tSM:sample1\\tPL:ILLUMINA' \
+                -t {threads} \
+                {input.ref} \
+                {input.r1} \
+                {input.r2} \
+            | samtools sort -@ {threads} -o {output.bam}
+
+        else
+            echo "ERROR: Unknown aligner: {aligner}"
+            exit 1
+        fi
+
+        samtools index {output.bam}
+        """
+
+
+# ==========================================================
+# variant calling, BCFtools, FreeBayes,
+# and GATK HaplotypeCaller
+# ==========================================================
+
+# perform bcftools
+rule benchmark_bcftools:
+    threads: 1
+
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa',
+        bam = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam',
+        bam_index = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam.bai'
+    
+    output:
+        vcf = f'Data/{chromosome}/{folder}/vcfs/bcftools.vcf.gz',
+        bench = f'Data/{chromosome}/{folder}/benchmarking/bcftools.txt'
+
+    shell:
+        '''
+        mkdir -p $(dirname {output.vcf})
+        mkdir -p $(dirname {output.bench})
+        /usr/bin/time -v -o {output.bench} \
+        bash -c '
+            bcftools mpileup \
+                -Ou \
+                -f {input.ref} \
+                {input.bam} \
+            | bcftools call \
+                -mv \
+                -Oz \
+                -o {output.vcf}
+            '
+        
+        '''
+
+# Perform freebayes
+rule benchmark_freebayes:
+    threads: 1
+
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa',
+        bam = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam',
+        bam_index = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam.bai'
+
+    output:
+        vcf = f'Data/{chromosome}/{folder}/vcfs/freebayes.vcf.gz',
+        bench = f'Data/{chromosome}/{folder}/benchmarking/freebayes.txt'
+
+    shell:
+        '''
+        mkdir -p $(dirname {output.vcf})
+        mkdir -p $(dirname {output.bench})
+
+        /usr/bin/time -v -o {output.bench} \
+        freebayes \
+            -f {input.ref} \
+            {input.bam} \
+        | bgzip -c > {output.vcf}
+        '''
+
+# Generate a sequence dictionary required by GATK.
+rule create_sequence_dictionary:
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa'
+
+    output:
+        dict = f'Data/{chromosome}/{chromosome}.dict'
+
+    shell:
+        '''
+        gatk CreateSequenceDictionary \
+            -R {input.ref} \
+            -O {output.dict}
+        '''
+
+# Perform gatk haplotypecaller
+rule benchmark_gatk_haplotypecaller:
+    threads: 1
+
+    input: 
+        ref = f'Data/{chromosome}/{chromosome}.fa',
+        bam = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam',
+        bam_index = f'Data/{chromosome}/{folder}/aligned/{aligner}_sorted.bam.bai',
+        dict = f'Data/{chromosome}/{chromosome}.dict'
+    
+    output: 
+        vcf = f'Data/{chromosome}/{folder}/vcfs/gatk.vcf.gz',
+        bench = f'Data/{chromosome}/{folder}/benchmarking/gatk.txt'
+    
+    shell:
+        '''
+        mkdir -p $(dirname {output.vcf})
+        mkdir -p $(dirname {output.bench})
+        /usr/bin/time -v -o {output.bench} \
+        gatk HaplotypeCaller \
+        -R {input.ref} \
+        -I {input.bam} \
+        -O {output.vcf}
+        '''
+
+# ==========================================================
+# Prepare datasets, normalize, seperate into SNPs, MNPs 
+# and indels
+# ==========================================================
+
+# normalize vcfs
+rule normalize_vcf:
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa',
+        truth = f'Data/{chromosome}/{folder}/simulated/truth.vcf',
+        bcf =  f'Data/{chromosome}/{folder}/vcfs/bcftools.vcf.gz',
+        fb = f'Data/{chromosome}/{folder}/vcfs/freebayes.vcf.gz',
+        gatk = f'Data/{chromosome}/{folder}/vcfs/gatk.vcf.gz'
+    
+    output:
+        norm_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm.vcf.gz',
+        norm_truth_index = f'Data/{chromosome}/{folder}/simulated/truth_norm.vcf.gz.tbi',
+        norm_bcf = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm.vcf.gz',
+        norm_bcf_index = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm.vcf.gz.tbi',
+        norm_fb = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm.vcf.gz',
+        norm_fb_index = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm.vcf.gz.tbi',
+        norm_gatk = f'Data/{chromosome}/{folder}/vcfs/gatk_norm.vcf.gz',
+        norm_gatk_index = f'Data/{chromosome}/{folder}/vcfs/gatk_norm.vcf.gz.tbi'
+
+    shell:
+        '''
+        bcftools norm -f {input.ref} -Oz -o {output.norm_truth} {input.truth}
+        bcftools index -t {output.norm_truth}
+        bcftools norm -f {input.ref} -Oz -o {output.norm_bcf} {input.bcf}
+        bcftools index -t {output.norm_bcf}
+        bcftools norm -f {input.ref} -Oz -o {output.norm_fb} {input.fb}
+        bcftools index -t {output.norm_fb}
+        bcftools norm -f {input.ref} -Oz -o {output.norm_gatk} {input.gatk}
+        bcftools index -t {output.norm_gatk}
+        '''
+# Split dataset to extract only indels
+rule split_indels: 
+    input:
+        norm_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm.vcf.gz',
+        norm_bcf = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm.vcf.gz',
+        norm_fb = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm.vcf.gz',
+        norm_gatk = f'Data/{chromosome}/{folder}/vcfs/gatk_norm.vcf.gz',
+    
+    output: 
+        norm_truth_indels = f'Data/{chromosome}/{folder}/simulated/truth_norm_indels.vcf.gz',
+        norm_truth_indels_index = f'Data/{chromosome}/{folder}/simulated/truth_norm_indels.vcf.gz.tbi',
+
+        norm_bcf_indels = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm_indels.vcf.gz',
+        norm_bcf_indels_index = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm_indels.vcf.gz.tbi',
+
+        norm_fb_indels = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm_indels.vcf.gz',
+        norm_fb_indels_index = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm_indels.vcf.gz.tbi',
+
+        norm_gatk_indels = f'Data/{chromosome}/{folder}/vcfs/gatk_norm_indels.vcf.gz',
+        norm_gatk_indels_index = f'Data/{chromosome}/{folder}/vcfs/gatk_norm_indels.vcf.gz.tbi'
+    
+    shell:
+        '''
+        set -e 
+        bcftools view -v indels {input.norm_truth} -Oz -o {output.norm_truth_indels}
+        bcftools index -t {output.norm_truth_indels}
+
+        bcftools view -v indels {input.norm_bcf} -Oz -o {output.norm_bcf_indels}
+        bcftools index -t {output.norm_bcf_indels}
+
+        bcftools view -v indels  {input.norm_fb} -Oz -o {output.norm_fb_indels}
+        bcftools index -t {output.norm_fb_indels}
+
+        bcftools view -v indels {input.norm_gatk} -Oz -o {output.norm_gatk_indels}
+        bcftools index -t {output.norm_gatk_indels}
+        '''
+
+# Split dataset to extract non-indels [SNPs, MNPs, other, etc.]
+rule split_non_indels: 
+    input:
+        norm_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm.vcf.gz',
+        norm_bcf = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm.vcf.gz',
+        norm_fb = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm.vcf.gz',
+        norm_gatk = f'Data/{chromosome}/{folder}/vcfs/gatk_norm.vcf.gz',
+    
+    output: 
+        norm_truth_non_indels = f'Data/{chromosome}/{folder}/simulated/truth_norm_non_indels.vcf.gz',
+        norm_truth_non_indels_index = f'Data/{chromosome}/{folder}/simulated/truth_norm_non_indels.vcf.gz.tbi',
+
+        norm_bcf_non_indels = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm_non_indels.vcf.gz',
+        norm_bcf_non_indels_index = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm_non_indels.vcf.gz.tbi',
+
+        norm_fb_non_indels = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm_non_indels.vcf.gz',
+        norm_fb_non_indels_index = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm_non_indels.vcf.gz.tbi',
+
+        norm_gatk_non_indels = f'Data/{chromosome}/{folder}/vcfs/gatk_norm_non_indels.vcf.gz',
+        norm_gatk_non_indels_index = f'Data/{chromosome}/{folder}/vcfs/gatk_norm_non_indels.vcf.gz.tbi',
+    
+    shell:
+        '''
+        set -e 
+        bcftools view -V indels {input.norm_truth} -Oz -o {output.norm_truth_non_indels}
+        bcftools index -t {output.norm_truth_non_indels}
+
+        bcftools view -V indels {input.norm_bcf} -Oz -o {output.norm_bcf_non_indels}
+        bcftools index -t {output.norm_bcf_non_indels}
+
+        bcftools view -V indels  {input.norm_fb} -Oz -o {output.norm_fb_non_indels}
+        bcftools index -t {output.norm_fb_non_indels}
+
+        bcftools view -V indels {input.norm_gatk} -Oz -o {output.norm_gatk_non_indels}
+        bcftools index -t {output.norm_gatk_non_indels}
+        '''
+
+# Convert reference FASTA to RTG SDF format
+rule format_reference:
+    input:
+        ref = f'Data/{chromosome}/{chromosome}.fa'
+
+    output:
+        sdf = directory(f'Data/{chromosome}/{chromosome}.sdf')
+
+    shell:
+        '''
+        rtg format \
+            -o {output.sdf} \
+            {input.ref}
+        '''
+
+# ==========================================================
+# Evaluate tools and append results to csv
+# ==========================================================
+
+# evaluate bcftools using RTG tools
+rule evaluate_bcftools:
+    input:
+        all_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm.vcf.gz',
+        all_calls = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm.vcf.gz',
+
+        indel_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm_indels.vcf.gz',
+        indel_calls = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm_indels.vcf.gz',
+
+        non_indel_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm_non_indels.vcf.gz',
+        non_indel_calls = f'Data/{chromosome}/{folder}/vcfs/bcftools_norm_non_indels.vcf.gz',
+
+        sdf = f'Data/{chromosome}/{chromosome}.sdf'
+
+    output:
+        all_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_all_accuracy.txt',
+        indel_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_indel_accuracy.txt',
+        non_indel_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_non_indel_accuracy.txt'
+
+    shell:
+        '''
+        set -e
+
+        mkdir -p Data/{chromosome}/{folder}/benchmarking/accuracy
+
+        rtg vcfeval -b {input.all_truth} -c {input.all_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_all
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_all/summary.txt \
+            {output.all_accuracy}
+
+
+        rtg vcfeval -b {input.indel_truth} -c {input.indel_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_indel
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_indel/summary.txt \
+            {output.indel_accuracy}
+
+
+        rtg vcfeval -b {input.non_indel_truth} -c {input.non_indel_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_non_indel
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_non_indel/summary.txt \
+            {output.non_indel_accuracy}
+
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_all
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_indel
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_non_indel
+        '''
+
+
+# evaluate freebayes using RTG tools
+rule evaluate_freebayes:
+    input:
+        all_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm.vcf.gz',
+        all_calls = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm.vcf.gz',
+
+        indel_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm_indels.vcf.gz',
+        indel_calls = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm_indels.vcf.gz',
+
+        non_indel_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm_non_indels.vcf.gz',
+        non_indel_calls = f'Data/{chromosome}/{folder}/vcfs/freebayes_norm_non_indels.vcf.gz',
+
+        sdf = f'Data/{chromosome}/{chromosome}.sdf'
+
+    output:
+        all_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_all_accuracy.txt',
+        indel_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_indel_accuracy.txt',
+        non_indel_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_non_indel_accuracy.txt'
+
+    shell:
+        '''
+        set -e
+
+        mkdir -p Data/{chromosome}/{folder}/benchmarking/accuracy
+
+        rtg vcfeval -b {input.all_truth} -c {input.all_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_all
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_all/summary.txt \
+            {output.all_accuracy}
+
+        rtg vcfeval -b {input.indel_truth} -c {input.indel_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_indel
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_indel/summary.txt \
+            {output.indel_accuracy}
+
+        rtg vcfeval -b {input.non_indel_truth} -c {input.non_indel_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_non_indel
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_non_indel/summary.txt \
+            {output.non_indel_accuracy}
+
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_all
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_indel
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_non_indel
+        '''
+
+
+# evaluate GATK HaplotypeCaller using RTG tools
+rule evaluate_gatk:
+    input:
+        all_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm.vcf.gz',
+        all_calls = f'Data/{chromosome}/{folder}/vcfs/gatk_norm.vcf.gz',
+
+        indel_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm_indels.vcf.gz',
+        indel_calls = f'Data/{chromosome}/{folder}/vcfs/gatk_norm_indels.vcf.gz',
+
+        non_indel_truth = f'Data/{chromosome}/{folder}/simulated/truth_norm_non_indels.vcf.gz',
+        non_indel_calls = f'Data/{chromosome}/{folder}/vcfs/gatk_norm_non_indels.vcf.gz',
+
+        sdf = f'Data/{chromosome}/{chromosome}.sdf'
+
+    output:
+        all_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_all_accuracy.txt',
+        indel_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_indel_accuracy.txt',
+        non_indel_accuracy = f'Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_non_indel_accuracy.txt'
+
+    shell:
+        '''
+        set -e
+
+        mkdir -p Data/{chromosome}/{folder}/benchmarking/accuracy
+
+        rtg vcfeval -b {input.all_truth} -c {input.all_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_all
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_all/summary.txt \
+            {output.all_accuracy}
+
+        rtg vcfeval -b {input.indel_truth} -c {input.indel_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_indel
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_indel/summary.txt \
+            {output.indel_accuracy}
+
+        rtg vcfeval -b {input.non_indel_truth} -c {input.non_indel_calls} -t {input.sdf} \
+            -o Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_non_indel
+
+        mv Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_non_indel/summary.txt \
+            {output.non_indel_accuracy}
+
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_all
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_indel
+        rm -rf Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_non_indel
+        '''
+
+# Append results to csv
+rule append_to_csv:
+    input:
+        bcf_bench = f'Data/{chromosome}/{folder}/benchmarking/bcftools.txt',
+        fb_bench = f'Data/{chromosome}/{folder}/benchmarking/freebayes.txt',
+        gatk_bench = f'Data/{chromosome}/{folder}/benchmarking/gatk.txt',
+
+        bcf_all_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_all_accuracy.txt',
+        bcf_indel_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_indel_accuracy.txt',
+        bcf_non_indel_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/bcftools_non_indel_accuracy.txt',
+
+        fb_all_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_all_accuracy.txt',
+        fb_indel_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_indel_accuracy.txt',
+        fb_non_indel_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/freebayes_non_indel_accuracy.txt',
+
+        gatk_all_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_all_accuracy.txt',
+        gatk_indel_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_indel_accuracy.txt',
+        gatk_non_indel_acc = f'Data/{chromosome}/{folder}/benchmarking/accuracy/gatk_non_indel_accuracy.txt',
+
+
+    output:
+        f'Data/{chromosome}/{folder}/benchmarking/collected.done'
+
+    shell:
+        '''
+        python scripts/collect_info.py \
+            --bcf {input.bcf_bench} {input.bcf_all_acc} {input.bcf_indel_acc} {input.bcf_non_indel_acc} \
+            --fb {input.fb_bench} {input.fb_all_acc} {input.fb_indel_acc} {input.fb_non_indel_acc} \
+            --gatk {input.gatk_bench} {input.gatk_all_acc} {input.gatk_indel_acc} {input.gatk_non_indel_acc} \
+            --chromosome {chromosome} \
+            --coverage {coverage} \
+            --seed {seed} \
+            --min_err {min_err} \
+            --max_err {max_err}
+        touch {output}
+        '''
