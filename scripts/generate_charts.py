@@ -26,19 +26,9 @@ def sanitize_filename(name: str) -> str:
       .replace("/", "_")
   )
 
-def macro_boxplots(df):
-    rate_metrics = [
-        "Precision",
-        "Sensitivity",
-        "F-measure",
-        "Indel-Precision",
-        "Indel-Sensitivity",
-        "Indel-F-measure",
-        "Non-Indel-Precision",
-        "Non-Indel-Sensitivity",
-        "Non-Indel-F-measure",
-    ]
-    resource_metrics = ["Time_in_Minutes", "Max RSS (gb)"]
+
+def boxplots(df, x_axis, metrics):
+
     TOOL_PALETTE = {
     "BCFtools": "#4477AA",  # Deep navy / HTSlib-inspired blue
     "FreeBayes": "#EE6677",  # Warm amber-orange
@@ -47,12 +37,12 @@ def macro_boxplots(df):
 
     sns.set_theme(style="ticks")
 
-    for stat in rate_metrics:
+    for stat in metrics:
         fig, ax = plt.subplots(figsize=(8, 5))
 
         sns.boxplot(
             data=df,
-            x="Coverage",
+            x=x_axis,
             y=stat,
             hue="Tool",
             palette=TOOL_PALETTE,
@@ -60,7 +50,7 @@ def macro_boxplots(df):
         )
 
         # ax.set_xticks(cov_ticks)
-        ax.set_xlabel("Coverage")
+        ax.set_xlabel(x_axis)
         ax.set_ylabel(f"{stat.replace('-', ' ')}")
         ax.set_title(f"{stat.replace('_', ' ')} across Coverage")
         ax.minorticks_on()
@@ -81,8 +71,65 @@ def macro_boxplots(df):
         sns.despine(ax=ax)
 
         out_name = sanitize_filename(stat)
-        fig.savefig(f"Figures/{out_name}.png", dpi=300, bbox_inches="tight")
+        fig.savefig(f"Figures/{x_axis}_{out_name}.png", dpi=300, bbox_inches="tight")
         plt.close(fig)
+
+
+def dotplots(df, metrics):
+    coverages = df.loc[:, 'Coverage'].unique()
+    markers = ['o', 's', 'D', '^']
+    # df_grouped = df.groupby(["Coverage", "Error_Group", "Tool"])[metrics].agg(mean='mean', sd='std').reset_index()
+
+    for stat in metrics:
+
+        _, ax = plt.subplots(figsize=(10, 7))
+        for cov, style in zip(coverages, markers):
+
+            sns.pointplot(data=df[df["Coverage"] == cov],
+                            x="Error_Group",
+                            y=stat,
+                            hue="Tool",
+                            estimator="mean",
+                            capsize=0.05,
+                            dodge=0.4,
+                            marker=style,
+                            errorbar=None,
+                            linestyles="none",
+                            palette=["#4477AA", "#EE6677", "#228833"],
+                            markersize=3,
+                            legend=(cov == coverages[0]),
+                            ax=ax,
+                        )
+            sns.pointplot()
+            sns.despine()
+            ax.set_ylim(0.75, 1.0)
+            ax.minorticks_on()
+            for line in ax.lines:
+                line.set_clip_on(False)
+            ax.tick_params(which="minor", axis='y', length=3, width=0.8, color="gray", direction='in')
+            ax.tick_params(axis='x', which='minor', bottom=False, top=False)
+            ax.tick_params(which="major", length=5, width=1.0, direction='in')
+
+        tool_handles, tool_labels = ax.get_legend_handles_labels()
+
+
+        cov_handles = [
+            plt.Line2D([], [], marker=m, color="gray", linestyle="None", label=str(c))
+            for c, m in zip(coverages, markers)
+        ]
+        coverage_handle = ax.legend(
+            handles=cov_handles,
+            title="Coverage",
+            loc="upper left",
+            bbox_to_anchor=(1.02, 0.75))
+        ax.legend(handles=tool_handles,labels=tool_labels,
+                  title="Tool", loc="upper left",
+                  bbox_to_anchor=(1.02, 1))
+        ax.add_artist(coverage_handle)
+        ax.margins(y=0.15, x=0.15)
+        plt.tight_layout()
+        plt.savefig(f'Figures/Error_Group_{stat}.png')
+        plt.close()
 
 def assign_pairs(min, max, error_list):
 
@@ -105,79 +152,95 @@ def main():
         lambda row: assign_pairs(row['Min_err'], row['Max_err'], error_pairs),
         axis=1
     )
-    macro_boxplots(df)
+    rate_metrics = [
+        "Precision",
+        "Sensitivity",
+        "F-measure",
+        "Indel-Precision",
+        "Indel-Sensitivity",
+        "Indel-F-measure",
+        "Non-Indel-Precision",
+        "Non-Indel-Sensitivity",
+        "Non-Indel-F-measure",
+    ]
+    resource_metrics = ["Time_in_Minutes", "Max RSS (gb)"]
+    # boxplots(df, 'Coverage', rate_metrics)
+    dotplots(df, rate_metrics)
+    
+
+
 
     # # Sort coverage so lines connect cleanly in order
     # df = df.sort_values("Coverage")
 
-    # Define the grouping columns
-    group_cols = ["Chromosome", "Coverage", "Seed", "Min_err", "Max_err"]
-
-    # Extract BCFtools F-measure per group and subtract it
-    baseline = (
-        df[df["Tool"] == "BCFtools"]
-        .set_index(group_cols)["F-measure"]
-        .rename("Baseline_F")
-    )
-
-    df = df.merge(baseline, on=group_cols, how="left")
-    df["Delta_F-measure"] = df["F-measure"] - df["Baseline_F"]
-
-    # Drop helper column and save
-    df.drop(columns=["Baseline_F"]).to_csv("results_with_delta.tsv", sep="\t", index=False)
-
-    df2 = pd.read_csv('results_with_delta.tsv', sep='\t')
-
-    df2_grouped = (
-    df2.groupby(["Coverage", "Error_Group", "Tool"])["Delta_F-measure"]
-    .mean()
-    .reset_index()
-    )
-
-    markers = ["o", "s", "^", "D", "P", "X"]
-    coverages = sorted(df2_grouped["Coverage"].unique())
-
-    fig, ax = plt.subplots()
-
-    for cov, marker in zip(coverages, markers):
-        sns.stripplot(
-            data=df2_grouped[df2_grouped["Coverage"] == cov],
-            x="Error_Group",
-            y="Delta_F-measure",
-            hue="Tool",
-            marker=marker,
-            dodge=True,
-            legend=(cov == coverages[0]),  # keep one Tool legend
-            ax=ax,
-        )
-    # Add a baseline reference line at Delta_F-measure = 0 (BCFtools)
-    ax.axhline(
-        0,
-        color="black",
-        linestyle="--",
-        linewidth=1.2,
-        zorder=0,  # keeps the line behind your data markers
-        label="BCFtools baseline (0)",
-    )
-    # Simple shape legend for Coverage
-    cov_handles = [
-        plt.Line2D([], [], marker=m, color="gray", linestyle="None", label=str(c))
-        for c, m in zip(coverages, markers)
-    ]
-    ax.legend(
-        handles=ax.get_legend_handles_labels()[0] + cov_handles,
-        labels=ax.get_legend_handles_labels()[1] + [str(c) for c in coverages],
-        bbox_to_anchor=(1.02, 1),
-        loc="upper left",
-    )
-
-    plt.tight_layout()
-    plt.show()
-    plt.savefig('Test.png')
 
 
 
-    
+    # # Define the grouping columns
+    # group_cols = ["Chromosome", "Coverage", "Seed", "Min_err", "Max_err"]
+
+    # # Extract BCFtools F-measure per group and subtract it
+    # baseline = (
+    #     df[df["Tool"] == "BCFtools"]
+    #     .set_index(group_cols)["F-measure"]
+    #     .rename("Baseline_F")
+    # )
+
+    # df = df.merge(baseline, on=group_cols, how="left")
+    # df["Delta_F-measure"] = df["F-measure"] - df["Baseline_F"]
+
+    # # Drop helper column and save
+    # df.drop(columns=["Baseline_F"]).to_csv("results_with_delta.tsv", sep="\t", index=False)
+
+    # df2 = pd.read_csv('results_with_delta.tsv', sep='\t')
+
+    # df2_grouped = (
+    # df2.groupby(["Coverage", "Error_Group", "Tool"])["Delta_F-measure"]
+    # .mean()
+    # .reset_index()
+    # )
+
+    # markers = ["o", "s", "^", "D", "P", "X"]
+    # coverages = sorted(df2_grouped["Coverage"].unique())
+
+    # fig, ax = plt.subplots()
+
+    # for cov, marker in zip(coverages, markers):
+    #     sns.stripplot(
+    #         data=df2_grouped[df2_grouped["Coverage"] == cov],
+    #         x="Error_Group",
+    #         y="Delta_F-measure",
+    #         hue="Tool",
+    #         marker=marker,
+    #         dodge=True,
+    #         legend=(cov == coverages[0]),  # keep one Tool legend
+    #         ax=ax,
+    #     )
+    # # Add a baseline reference line at Delta_F-measure = 0 (BCFtools)
+    # ax.axhline(
+    #     0,
+    #     color="black",
+    #     linestyle="--",
+    #     linewidth=1.2,
+    #     zorder=0,  # keeps the line behind your data markers
+    #     label="BCFtools baseline (0)",
+    # )
+    # # Simple shape legend for Coverage
+    # cov_handles = [
+    #     plt.Line2D([], [], marker=m, color="gray", linestyle="None", label=str(c))
+    #     for c, m in zip(coverages, markers)
+    # ]
+    # ax.legend(
+    #     handles=ax.get_legend_handles_labels()[0] + cov_handles,
+    #     labels=ax.get_legend_handles_labels()[1] + [str(c) for c in coverages],
+    #     bbox_to_anchor=(1.02, 1),
+    #     loc="upper left",
+    # )
+
+    # plt.tight_layout()
+    # plt.show()
+    # plt.savefig('Test.png')
+
 
 if __name__ == '__main__':
     main()
